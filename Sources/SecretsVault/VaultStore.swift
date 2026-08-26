@@ -420,7 +420,7 @@ final class VaultStore: ObservableObject {
 
     func addDocument(in folderID: UUID?) {
         guard phase == .unlocked else { return }
-        let doc = VaultDocument(title: "Untitled", content: "", folderID: folderID)
+        let doc = VaultDocument(title: "", content: "", folderID: folderID)
         data.documents.append(doc)
         selectedDocumentID = doc.id
         scheduleSave()

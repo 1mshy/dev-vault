@@ -17,12 +17,21 @@ struct MainView: View {
         .searchable(text: $searchText, prompt: "Search vault")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    SettingsWindow.open()
-                } label: {
-                    Label("Settings", systemImage: "gearshape")
+                if #available(macOS 14.0, *) {
+                    // showSettingsWindow: no longer works on macOS 14+;
+                    // SettingsLink is the supported way to open Settings.
+                    SettingsLink {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .help("Settings (\u{2318},)")
+                } else {
+                    Button {
+                        SettingsWindow.open()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                    .help("Settings (\u{2318},)")
                 }
-                .help("Settings (\u{2318},)")
                 Button {
                     store.lock()
                 } label: {
