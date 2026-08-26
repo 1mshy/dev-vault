@@ -18,6 +18,10 @@ final class VaultStore: ObservableObject {
     @Published var selectedDocumentID: UUID?
     @Published var errorMessage: String?
     @Published var biometricsEnabled: Bool
+    @Published var currentVaultName: String {
+        didSet { UserDefaults.standard.set(currentVaultName, forKey: Self.currentVaultKey) }
+    }
+    @Published var availableVaults: [String] = []
     @Published var autoLockMinutes: Int {
         didSet { UserDefaults.standard.set(autoLockMinutes, forKey: Self.autoLockKey) }
     }
@@ -35,20 +39,92 @@ final class VaultStore: ObservableObject {
     /// click the Touch ID button instead of being prompted automatically.
     var hasAutoPromptedBiometrics = false
 
-    private static let biometricsKey = "biometricsEnabled"
+    private static let legacyBiometricsKey = "biometricsEnabled"
     private static let autoLockKey = "autoLockMinutes"
+    private static let currentVaultKey = "currentVault"
 
-    static var fileURL: URL {
+    /// Name of the vault a fresh install starts with, and the one the legacy
+    /// single-vault file is migrated to.
+    static let defaultVaultName = "Main"
+
+    // MARK: - Vault files
+
+    static var directoryURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("SecretsVault", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("vault.secrets")
+        return dir
+    }
+
+    static func fileURL(for name: String) -> URL {
+        directoryURL.appendingPathComponent("\(name).secrets")
+    }
+
+    /// The current vault's file on disk.
+    var fileURL: URL { Self.fileURL(for: currentVaultName) }
+
+    static func biometricsDefaultsKey(for name: String) -> String {
+        "biometricsEnabled.\(name)"
+    }
+
+    /// Keychain account holding a vault's Touch ID key. The default vault
+    /// keeps the pre-multi-vault account name so existing setups survive.
+    static func keychainAccount(for name: String) -> String {
+        name == defaultVaultName ? "vault-master-key" : "vault-master-key.\(name)"
+    }
+
+    private var keychainAccount: String { Self.keychainAccount(for: currentVaultName) }
+
+    /// Every vault in the storage directory (file name without ".secrets"),
+    /// sorted for display. Rotated backups (*.secrets.N) don't match.
+    static func scanVaults() -> [String] {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: directoryURL, includingPropertiesForKeys: nil)) ?? []
+        return files
+            .filter { $0.pathExtension == "secrets" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    /// One-time migration: the pre-multi-vault "vault.secrets" file (and its
+    /// backups and Touch ID flag) becomes the vault named `defaultVaultName`.
+    private static func migrateLegacyVaultIfNeeded() {
+        let fm = FileManager.default
+        let legacy = directoryURL.appendingPathComponent("vault.secrets")
+        let target = fileURL(for: defaultVaultName)
+        guard fm.fileExists(atPath: legacy.path), !fm.fileExists(atPath: target.path) else { return }
+        try? fm.moveItem(at: legacy, to: target)
+        for n in 1...backupCount {
+            let from = legacy.appendingPathExtension("\(n)")
+            let to = target.appendingPathExtension("\(n)")
+            if fm.fileExists(atPath: from.path), !fm.fileExists(atPath: to.path) {
+                try? fm.moveItem(at: from, to: to)
+            }
+        }
+        // The global Touch ID flag becomes the migrated vault's flag.
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: legacyBiometricsKey) != nil {
+            defaults.set(defaults.bool(forKey: legacyBiometricsKey),
+                         forKey: biometricsDefaultsKey(for: defaultVaultName))
+            defaults.removeObject(forKey: legacyBiometricsKey)
+        }
     }
 
     init() {
-        biometricsEnabled = UserDefaults.standard.bool(forKey: Self.biometricsKey)
+        Self.migrateLegacyVaultIfNeeded()
+        let vaults = Self.scanVaults()
+        let saved = UserDefaults.standard.string(forKey: Self.currentVaultKey)
+        let name: String
+        if let saved, vaults.contains(saved) {
+            name = saved
+        } else {
+            name = vaults.first ?? Self.defaultVaultName
+        }
+        currentVaultName = name
+        availableVaults = vaults
+        biometricsEnabled = UserDefaults.standard.bool(forKey: Self.biometricsDefaultsKey(for: name))
         autoLockMinutes = (UserDefaults.standard.object(forKey: Self.autoLockKey) as? Int) ?? 10
-        phase = FileManager.default.fileExists(atPath: Self.fileURL.path) ? .locked : .needsSetup
+        phase = FileManager.default.fileExists(atPath: Self.fileURL(for: name).path) ? .locked : .needsSetup
         installSecurityObservers()
     }
 
@@ -89,22 +165,116 @@ final class VaultStore: ObservableObject {
 
     // MARK: - Setup / unlock / lock
 
-    func createVault(password: String) async {
+    static func sanitizedVaultName(_ raw: String) -> String {
+        var cleaned = raw
+            .components(separatedBy: CharacterSet(charactersIn: "/:\\"))
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespaces)
+        cleaned = String(cleaned.prefix(60))
+        while cleaned.hasPrefix(".") { cleaned.removeFirst() }
+        return cleaned
+    }
+
+    /// True when `raw` sanitizes to a usable name no existing vault uses.
+    func vaultNameAvailable(_ raw: String) -> Bool {
+        let name = Self.sanitizedVaultName(raw)
+        guard !name.isEmpty else { return false }
+        return !FileManager.default.fileExists(atPath: Self.fileURL(for: name).path)
+    }
+
+    func refreshVaults() {
+        availableVaults = Self.scanVaults()
+    }
+
+    /// Switches the login page to another (still locked) vault.
+    func switchVault(to name: String) {
+        guard phase != .unlocked else { return }
+        guard FileManager.default.fileExists(atPath: Self.fileURL(for: name).path) else { return }
+        key = nil
+        envelope = nil
+        currentVaultName = name
+        biometricsEnabled = UserDefaults.standard.bool(forKey: Self.biometricsDefaultsKey(for: name))
+        errorMessage = nil
+        phase = .locked
+        refreshVaults()
+    }
+
+    /// From the login page: show the create-vault screen for an extra vault.
+    func beginNewVault() {
+        guard phase == .locked else { return }
+        phase = .needsSetup
+    }
+
+    /// Backs out of creating an extra vault, returning to the login page of
+    /// the vault that was selected before.
+    func cancelNewVault() {
+        guard phase == .needsSetup,
+              FileManager.default.fileExists(atPath: fileURL.path) else { return }
+        biometricsEnabled = UserDefaults.standard.bool(forKey: Self.biometricsDefaultsKey(for: currentVaultName))
+        errorMessage = nil
+        phase = .locked
+    }
+
+    func createVault(named rawName: String, password: String) async {
+        let name = Self.sanitizedVaultName(rawName)
+        guard !name.isEmpty else {
+            errorMessage = "Enter a name for the vault."
+            return
+        }
+        guard !FileManager.default.fileExists(atPath: Self.fileURL(for: name).path) else {
+            errorMessage = "A vault named \u{201C}\(name)\u{201D} already exists."
+            return
+        }
         do {
             let env = CryptoService.newEnvelope()
             let newKey = try await Task.detached(priority: .userInitiated) {
                 try CryptoService.deriveKey(password: password, envelope: env)
             }.value
+            currentVaultName = name
+            biometricsEnabled = UserDefaults.standard.bool(forKey: Self.biometricsDefaultsKey(for: name))
             key = newKey
             envelope = env
             data = VaultData.starter()
             try persist()
+            refreshVaults()
             phase = .unlocked
             selectedDocumentID = data.documents.first?.id
             touchActivity()
             startAutoLockTimer()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Permanently deletes the current vault, its backups, and its Touch ID
+    /// key. Only possible while the vault is unlocked. Falls back to another
+    /// vault's login page, or to setup when this was the last vault.
+    func deleteCurrentVault() {
+        guard phase == .unlocked else { return }
+        saveTask?.cancel()
+        let name = currentVaultName
+        let fm = FileManager.default
+        try? fm.removeItem(at: fileURL)
+        for n in 1...Self.backupCount {
+            try? fm.removeItem(at: backupURL(n))
+        }
+        KeychainService.deleteKey(account: Self.keychainAccount(for: name))
+        UserDefaults.standard.removeObject(forKey: Self.biometricsDefaultsKey(for: name))
+        key = nil
+        envelope = nil
+        data = VaultData()
+        selectedDocumentID = nil
+        autoLockTimer?.invalidate()
+        autoLockTimer = nil
+        refreshVaults()
+        if let next = availableVaults.first {
+            currentVaultName = next
+            biometricsEnabled = UserDefaults.standard.bool(forKey: Self.biometricsDefaultsKey(for: next))
+            phase = .locked
+        } else {
+            currentVaultName = Self.defaultVaultName
+            biometricsEnabled = false
+            phase = .needsSetup
         }
     }
 
@@ -132,7 +302,7 @@ final class VaultStore: ObservableObject {
         guard biometricsEnabled else { return }
         do {
             let env = try readEnvelope()
-            let keyData = try await KeychainService.fetchKey(reason: "unlock your vault")
+            let keyData = try await KeychainService.fetchKey(account: keychainAccount, reason: "unlock your vault")
             try completeUnlock(env: env, candidate: SymmetricKey(data: keyData))
         } catch KeychainError.userCanceled {
             // The user dismissed the Touch ID prompt; not an error.
@@ -175,7 +345,7 @@ final class VaultStore: ObservableObject {
     // MARK: - Persistence
 
     private func readEnvelope() throws -> VaultEnvelope {
-        let raw = try Data(contentsOf: Self.fileURL)
+        let raw = try Data(contentsOf: fileURL)
         return try JSONDecoder().decode(VaultEnvelope.self, from: raw)
     }
 
@@ -186,9 +356,9 @@ final class VaultStore: ObservableObject {
         envelope = env
         let envData = try JSONEncoder().encode(env)
         rotateBackups()
-        try envData.write(to: Self.fileURL, options: [.atomic])
+        try envData.write(to: fileURL, options: [.atomic])
         try? FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                               ofItemAtPath: Self.fileURL.path)
+                                               ofItemAtPath: fileURL.path)
     }
 
     func scheduleSave() {
@@ -349,18 +519,19 @@ final class VaultStore: ObservableObject {
                 return
             }
             let kd = CryptoService.keyData(key)
+            let account = keychainAccount
             do {
-                try await Task.detached { try KeychainService.storeKey(kd) }.value
+                try await Task.detached { try KeychainService.storeKey(kd, account: account) }.value
                 biometricsEnabled = true
             } catch {
                 errorMessage = "Could not enable Touch ID: \(error.localizedDescription)"
                 biometricsEnabled = false
             }
         } else {
-            KeychainService.deleteKey()
+            KeychainService.deleteKey(account: keychainAccount)
             biometricsEnabled = false
         }
-        UserDefaults.standard.set(biometricsEnabled, forKey: Self.biometricsKey)
+        UserDefaults.standard.set(biometricsEnabled, forKey: Self.biometricsDefaultsKey(for: currentVaultName))
     }
 
     /// Returns nil on success, otherwise a user-facing error message.
@@ -395,7 +566,8 @@ final class VaultStore: ObservableObject {
         deleteAllBackups()
         if biometricsEnabled {
             let kd = CryptoService.keyData(newKey)
-            try await Task.detached { try KeychainService.storeKey(kd) }.value
+            let account = keychainAccount
+            try await Task.detached { try KeychainService.storeKey(kd, account: account) }.value
         }
     }
 
@@ -407,13 +579,13 @@ final class VaultStore: ObservableObject {
     /// doesn't flush the whole backup history with near-identical copies.
     private static let backupMinInterval: TimeInterval = 5 * 60
 
-    static func backupURL(_ n: Int) -> URL {
+    func backupURL(_ n: Int) -> URL {
         fileURL.appendingPathExtension("\(n)")
     }
 
     /// Existing backups, newest (.1) first, with their modification dates.
-    static func existingBackups() -> [(url: URL, date: Date)] {
-        (1...backupCount).compactMap { n in
+    func existingBackups() -> [(url: URL, date: Date)] {
+        (1...Self.backupCount).compactMap { n in
             let url = backupURL(n)
             guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
                   let date = attrs[.modificationDate] as? Date else { return nil }
@@ -426,24 +598,24 @@ final class VaultStore: ObservableObject {
     /// only copy. Skipped while the last rotation is recent, unless `force`d.
     private func rotateBackups(force: Bool = false) {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: Self.fileURL.path) else { return }
+        guard fm.fileExists(atPath: fileURL.path) else { return }
         guard force || Date().timeIntervalSince(lastBackupRotation) >= Self.backupMinInterval else { return }
-        try? fm.removeItem(at: Self.backupURL(Self.backupCount))
+        try? fm.removeItem(at: backupURL(Self.backupCount))
         for n in stride(from: Self.backupCount - 1, through: 1, by: -1) {
-            let from = Self.backupURL(n)
+            let from = backupURL(n)
             guard fm.fileExists(atPath: from.path) else { continue }
-            try? fm.moveItem(at: from, to: Self.backupURL(n + 1))
+            try? fm.moveItem(at: from, to: backupURL(n + 1))
         }
-        try? fm.copyItem(at: Self.fileURL, to: Self.backupURL(1))
+        try? fm.copyItem(at: fileURL, to: backupURL(1))
         try? fm.setAttributes([.posixPermissions: 0o600],
-                              ofItemAtPath: Self.backupURL(1).path)
+                              ofItemAtPath: backupURL(1).path)
         lastBackupRotation = Date()
     }
 
     /// Removes every rotated backup.
     private func deleteAllBackups() {
         for n in 1...Self.backupCount {
-            try? FileManager.default.removeItem(at: Self.backupURL(n))
+            try? FileManager.default.removeItem(at: backupURL(n))
         }
     }
 
@@ -455,7 +627,7 @@ final class VaultStore: ObservableObject {
         guard phase == .unlocked else { return false }
         saveNow() // flush pending edits so the copy is current
         do {
-            let raw = try Data(contentsOf: Self.fileURL)
+            let raw = try Data(contentsOf: fileURL)
             try raw.write(to: url, options: [.atomic])
             try? FileManager.default.setAttributes([.posixPermissions: 0o600],
                                                    ofItemAtPath: url.path)
@@ -518,18 +690,18 @@ final class VaultStore: ObservableObject {
         if phase == .unlocked { saveNow() }
         rotateBackups(force: true)
         do {
-            try raw.write(to: Self.fileURL, options: [.atomic])
+            try raw.write(to: fileURL, options: [.atomic])
         } catch {
             return "Import failed: \(error.localizedDescription)"
         }
         try? FileManager.default.setAttributes([.posixPermissions: 0o600],
-                                               ofItemAtPath: Self.fileURL.path)
+                                               ofItemAtPath: fileURL.path)
         // The Touch ID key in the keychain unlocks the replaced vault, not
         // the imported one — drop it.
         if biometricsEnabled {
-            KeychainService.deleteKey()
+            KeychainService.deleteKey(account: keychainAccount)
             biometricsEnabled = false
-            UserDefaults.standard.set(false, forKey: Self.biometricsKey)
+            UserDefaults.standard.set(false, forKey: Self.biometricsDefaultsKey(for: currentVaultName))
         }
         if phase == .unlocked {
             lock(save: false) // don't overwrite the imported file with old data

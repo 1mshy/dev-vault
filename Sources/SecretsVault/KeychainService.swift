@@ -36,15 +36,14 @@ enum KeychainError: Error, LocalizedError {
 enum KeychainService {
 
     private static let service = "com.secretsvault.app"
-    private static let account = "vault-master-key"
 
     static var biometryAvailable: Bool {
         var error: NSError?
         return LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
     }
 
-    static func storeKey(_ keyData: Data) throws {
-        deleteKey()
+    static func storeKey(_ keyData: Data, account: String) throws {
+        deleteKey(account: account)
 
         var acErr: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
@@ -74,7 +73,7 @@ enum KeychainService {
         guard status == errSecSuccess else { throw KeychainError.status(status) }
     }
 
-    static func fetchKey(reason: String) async throws -> Data {
+    static func fetchKey(account: String, reason: String) async throws -> Data {
         let context = LAContext()
         context.localizedReason = reason
 
@@ -130,7 +129,7 @@ enum KeychainService {
         }
     }
 
-    static func deleteKey() {
+    static func deleteKey(account: String) {
         for useDataProtection in [true, false] {
             var query: [String: Any] = [
                 kSecClass as String: kSecClassGenericPassword,

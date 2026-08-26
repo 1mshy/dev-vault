@@ -174,6 +174,7 @@ private struct VaultSettings: View {
     @State private var showImportConfirm = false
     @State private var transferStatus: String?
     @State private var transferSucceeded = false
+    @State private var showDeleteConfirm = false
 
     private var isUnlocked: Bool { store.phase == .unlocked }
 
@@ -206,18 +207,28 @@ private struct VaultSettings: View {
                 }
             }
             Section("Storage") {
-                LabeledContent("Vault file", value: VaultStore.fileURL.path)
+                LabeledContent("Vault", value: store.currentVaultName)
+                LabeledContent("Vault file", value: store.fileURL.path)
                 LabeledContent("Backups", value: backupSummary)
-                Text("Before each overwrite the previous vault file is rotated into vault.secrets.1…\(VaultStore.backupCount) next to the vault (at most once every 5 minutes). Recently Deleted documents are purged after \(VaultStore.deletedRetentionDays) days.")
+                Text("Before each overwrite the previous vault file is rotated into \(store.currentVaultName).secrets.1…\(VaultStore.backupCount) next to the vault (at most once every 5 minutes). Recently Deleted documents are purged after \(VaultStore.deletedRetentionDays) days.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Reveal in Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([VaultStore.fileURL])
+                    NSWorkspace.shared.activateFileViewerSelecting([store.fileURL])
                 }
+            }
+            Section("Danger Zone") {
+                Button("Delete This Vault…", role: .destructive) { showDeleteConfirm = true }
+                    .disabled(!isUnlocked)
+                Text(isUnlocked
+                     ? "Permanently deletes “\(store.currentVaultName)” and its backups. Other vaults are not affected."
+                     : "A vault can only be deleted while it is unlocked — open it first.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(height: 540)
+        .frame(height: 620)
         .alert("Export Unencrypted Markdown?", isPresented: $showMarkdownWarning) {
             Button("Export Anyway", role: .destructive) { exportMarkdown() }
             Button("Cancel", role: .cancel) {}
@@ -228,7 +239,16 @@ private struct VaultSettings: View {
             Button("Choose File…", role: .destructive) { chooseAndImportVault() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("The imported vault replaces the current one and the app locks. You will need the imported vault's master password to unlock it. The current vault is kept as backup 1 (vault.secrets.1).")
+            Text("The imported vault replaces the current one and the app locks. You will need the imported vault's master password to unlock it. The current vault is kept as backup 1.")
+        }
+        .alert("Delete Vault “\(store.currentVaultName)”?", isPresented: $showDeleteConfirm) {
+            Button("Delete Vault", role: .destructive) {
+                store.deleteCurrentVault()
+                SettingsWindow.close()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The vault file and all of its rotated backups will be permanently deleted. This cannot be undone. Export an encrypted copy first if you might need it again.")
         }
     }
 
@@ -239,7 +259,7 @@ private struct VaultSettings: View {
     }
 
     private var backupSummary: String {
-        let backups = VaultStore.existingBackups()
+        let backups = store.existingBackups()
         guard let newest = backups.first else { return "None yet" }
         return "\(backups.count) of \(VaultStore.backupCount) · newest \(newest.date.formatted(date: .abbreviated, time: .shortened))"
     }
@@ -276,7 +296,7 @@ private struct VaultSettings: View {
     private func chooseAndImportVault() {
         let panel = NSOpenPanel()
         panel.title = "Import Vault"
-        panel.message = "Choose a Secrets Vault export or a rotated backup (vault.secrets.1…\(VaultStore.backupCount))."
+        panel.message = "Choose a Secrets Vault export or a rotated backup (.secrets.1…\(VaultStore.backupCount))."
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false

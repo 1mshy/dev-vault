@@ -37,13 +37,7 @@ struct DocumentEditor: View {
             Divider()
 
             if mode == .edit {
-                TextEditor(text: $document.content)
-                    .font(.system(size: 13.5, design: .monospaced))
-                    .foregroundColor(theme.textPrimary ?? Color.primary)
-                    .autocorrectionDisabled(true)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .themedScrollBackground(theme.contentBackground)
+                LiveMarkdownEditor(text: $document.content, theme: theme)
             } else {
                 MarkdownPreview(text: document.content)
             }

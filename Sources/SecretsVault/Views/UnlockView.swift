@@ -24,6 +24,27 @@ struct UnlockView: View {
             Text("The vault is locked")
                 .foregroundStyle(theme.resolvedTextSecondary)
 
+            Menu {
+                ForEach(store.availableVaults, id: \.self) { name in
+                    Button {
+                        store.switchVault(to: name)
+                    } label: {
+                        if name == store.currentVaultName {
+                            Label(name, systemImage: "checkmark")
+                        } else {
+                            Text(name)
+                        }
+                    }
+                }
+                Divider()
+                Button("New Vault\u{2026}") { store.beginNewVault() }
+            } label: {
+                Label(store.currentVaultName, systemImage: "archivebox")
+            }
+            .fixedSize()
+            .disabled(isWorking)
+            .help("Choose which vault to open")
+
             SecureField("Master password", text: $password)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 280)
@@ -56,7 +77,14 @@ struct UnlockView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear { focused = true }
+        .onAppear {
+            store.refreshVaults()
+            focused = true
+        }
+        .onChange(of: store.currentVaultName) { _ in
+            password = ""
+            focused = true
+        }
         .task {
             // Auto-prompt Touch ID only once per app launch (startup).
             if canTouchID && !store.hasAutoPromptedBiometrics {
