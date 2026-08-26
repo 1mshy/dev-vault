@@ -145,14 +145,16 @@ final class VaultStore: ObservableObject {
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.screensDidSleepNotification,
             object: nil, queue: .main) { _ in lockIfNeeded() })
-        // Vault window closed → lock the vault (sheets and panels don't count).
+        // Vault window closed → lock the vault. Sheets, panels and borderless
+        // transient windows (context menus, tooltips) don't count.
         observers.append(NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: nil, queue: .main) { note in
             guard let window = note.object as? NSWindow,
                   !window.isSheet,
                   window.sheetParent == nil,
-                  !(window is NSPanel) else { return }
+                  !(window is NSPanel),
+                  window.styleMask.contains(.titled) else { return }
             lockIfNeeded()
         })
         // Exclude every app window from screenshots and screen sharing.
