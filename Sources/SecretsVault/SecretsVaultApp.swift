@@ -5,6 +5,7 @@ import Combine
 @main
 struct SecretsVaultApp: App {
     @StateObject private var store = VaultStore()
+    @StateObject private var themes = ThemeManager()
 
     init() {
         if CommandLine.arguments.contains("--selftest") {
@@ -16,6 +17,9 @@ struct SecretsVaultApp: App {
         WindowGroup("Secrets Vault") {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(themes)
+                .tint(themes.current.resolvedAccent)
+                .preferredColorScheme(themes.current.colorScheme)
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     store.saveNow()
                 }

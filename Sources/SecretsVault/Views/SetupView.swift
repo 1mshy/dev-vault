@@ -3,9 +3,12 @@ import AppKit
 
 struct SetupView: View {
     @EnvironmentObject var store: VaultStore
+    @EnvironmentObject var themes: ThemeManager
     @State private var password = ""
     @State private var confirm = ""
     @State private var isWorking = false
+
+    private var theme: Theme { themes.current }
 
     private var valid: Bool { password.count >= 8 && password == confirm }
 
@@ -13,11 +16,12 @@ struct SetupView: View {
         VStack(spacing: 16) {
             Image(systemName: "lock.shield.fill")
                 .font(.system(size: 56))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(theme.resolvedAccent)
             Text("Welcome to Secrets Vault")
                 .font(.largeTitle.bold())
+                .foregroundStyle(theme.resolvedTextPrimary)
             Text("Create a master password to encrypt your vault.")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.resolvedTextSecondary)
 
             VStack(spacing: 10) {
                 SecureField("Master password (min 8 characters)", text: $password)
@@ -56,7 +60,7 @@ struct SetupView: View {
 
             Text("Your vault is encrypted with AES-256. The master password cannot be recovered — if you forget it, the vault contents are lost.")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(theme.resolvedTextTertiary)
                 .multilineTextAlignment(.center)
                 .frame(width: 360)
         }

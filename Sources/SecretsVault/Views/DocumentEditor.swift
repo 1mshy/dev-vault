@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DocumentEditor: View {
     @EnvironmentObject var store: VaultStore
+    @EnvironmentObject var themes: ThemeManager
     @Binding var document: VaultDocument
 
     private enum Mode: String, CaseIterable {
@@ -11,12 +12,15 @@ struct DocumentEditor: View {
 
     @State private var mode: Mode = .edit
 
+    private var theme: Theme { themes.current }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 TextField("Title", text: $document.title)
                     .font(.title2.bold())
                     .textFieldStyle(.plain)
+                    .foregroundStyle(theme.resolvedTextPrimary)
                 Spacer()
                 Picker("", selection: $mode) {
                     ForEach(Mode.allCases, id: \.self) { m in
@@ -35,9 +39,11 @@ struct DocumentEditor: View {
             if mode == .edit {
                 TextEditor(text: $document.content)
                     .font(.system(size: 13.5, design: .monospaced))
+                    .foregroundColor(theme.textPrimary ?? Color.primary)
                     .autocorrectionDisabled(true)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
+                    .themedScrollBackground(theme.contentBackground)
             } else {
                 MarkdownPreview(text: document.content)
             }
@@ -50,10 +56,11 @@ struct DocumentEditor: View {
                 Text("\(document.content.count) characters")
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.resolvedTextSecondary)
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
         }
+        .themedBackground(theme.contentBackground)
         .onChange(of: document.content) { _ in
             document.updatedAt = Date()
             store.scheduleSave()

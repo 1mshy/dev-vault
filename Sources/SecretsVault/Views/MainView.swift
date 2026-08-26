@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MainView: View {
     @EnvironmentObject var store: VaultStore
+    @EnvironmentObject var themes: ThemeManager
     @State private var searchText = ""
     @State private var showSettings = false
 
@@ -9,8 +10,10 @@ struct MainView: View {
         NavigationSplitView {
             SidebarView(searchText: $searchText)
                 .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 340)
+                .themedToolbarBackground(themes.current.sidebarBackground ?? themes.current.windowBackground)
         } detail: {
             DetailView()
+                .themedToolbarBackground(themes.current.windowBackground)
         }
         .searchable(text: $searchText, prompt: "Search vault")
         .toolbar {
@@ -30,7 +33,10 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(store)
+            SettingsView()
+                .environmentObject(store)
+                .environmentObject(themes)
+                .tint(themes.current.resolvedAccent)
         }
         .onChange(of: store.selectedDocumentID) { _ in
             store.touchActivity()
@@ -40,6 +46,7 @@ struct MainView: View {
 
 struct SidebarView: View {
     @EnvironmentObject var store: VaultStore
+    @EnvironmentObject var themes: ThemeManager
     @Binding var searchText: String
 
     @State private var collapsed: Set<UUID> = []
@@ -50,6 +57,8 @@ struct SidebarView: View {
     @State private var deleteFolderTarget: VaultFolder?
     @State private var purgeDocTarget: VaultDocument?
     @State private var showEmptyTrashConfirm = false
+
+    private var theme: Theme { themes.current }
 
     private var sortedFolders: [VaultFolder] {
         store.data.folders.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -64,7 +73,7 @@ struct SidebarView: View {
                         documentRow(doc)
                     }
                     if results.isEmpty {
-                        Text("No matches").font(.caption).foregroundStyle(.tertiary)
+                        Text("No matches").font(.caption).foregroundStyle(theme.resolvedTextTertiary)
                     }
                 }
             } else {
@@ -74,7 +83,7 @@ struct SidebarView: View {
                         documentRow(doc)
                     }
                     if rootDocs.isEmpty && store.data.folders.isEmpty {
-                        Text("No documents yet").font(.caption).foregroundStyle(.tertiary)
+                        Text("No documents yet").font(.caption).foregroundStyle(theme.resolvedTextTertiary)
                     }
                 }
                 Section("Folders") {
@@ -85,7 +94,7 @@ struct SidebarView: View {
                                 documentRow(doc)
                             }
                             if docs.isEmpty {
-                                Text("Empty").font(.caption).foregroundStyle(.tertiary)
+                                Text("Empty").font(.caption).foregroundStyle(theme.resolvedTextTertiary)
                             }
                         } label: {
                             Label(folder.name, systemImage: "folder")
@@ -113,6 +122,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .themedScrollBackground(theme.sidebarBackground)
         .toolbar {
             ToolbarItemGroup {
                 Button {
@@ -234,26 +244,34 @@ struct DetailView: View {
 }
 
 struct EmptySelectionView: View {
+    @EnvironmentObject var themes: ThemeManager
+
+    private var theme: Theme { themes.current }
+
     var body: some View {
         VStack(spacing: 10) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: 40))
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(theme.resolvedTextTertiary)
             Text("No Document Selected")
                 .font(.title3)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.resolvedTextSecondary)
             Text("Select a document in the sidebar or press ⌘N to create one.")
                 .font(.callout)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(theme.resolvedTextTertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .themedBackground(theme.contentBackground)
     }
 }
 
 struct DeletedDocumentView: View {
     @EnvironmentObject var store: VaultStore
+    @EnvironmentObject var themes: ThemeManager
     let document: VaultDocument
     @State private var confirmPurge = false
+
+    private var theme: Theme { themes.current }
 
     private var displayTitle: String {
         document.title.isEmpty ? "Untitled" : document.title
@@ -269,6 +287,7 @@ struct DeletedDocumentView: View {
             HStack(spacing: 12) {
                 Text(displayTitle)
                     .font(.title2.bold())
+                    .foregroundStyle(theme.resolvedTextPrimary)
                     .lineLimit(1)
                 Spacer()
                 Button("Restore") { store.restoreDocument(document.id) }
@@ -284,13 +303,14 @@ struct DeletedDocumentView: View {
                 Text("In Recently Deleted — removed forever on \(purgeDate.formatted(date: .abbreviated, time: .omitted)). Restore to edit.")
             }
             .font(.callout)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(theme.resolvedTextSecondary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.05))
+            .background(theme.resolvedBanner)
 
             MarkdownPreview(text: document.content)
         }
+        .themedBackground(theme.contentBackground)
         .alert("Delete Permanently?", isPresented: $confirmPurge) {
             Button("Delete Permanently", role: .destructive) { store.purgeDocument(document.id) }
             Button("Cancel", role: .cancel) {}

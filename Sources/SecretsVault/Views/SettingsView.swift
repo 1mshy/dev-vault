@@ -3,6 +3,7 @@ import AppKit
 
 struct SettingsView: View {
     @EnvironmentObject var store: VaultStore
+    @EnvironmentObject var themes: ThemeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var currentPassword = ""
@@ -19,6 +20,22 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                Section("Appearance") {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 10)], spacing: 12) {
+                        ForEach(Theme.all) { theme in
+                            Button {
+                                themes.themeID = theme.id
+                            } label: {
+                                ThemeSwatch(theme: theme, isSelected: theme.id == themes.themeID)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    Text("Themes apply instantly and are remembered across launches. System follows the macOS appearance.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Section("Security") {
                     Toggle("Unlock with Touch ID", isOn: biometricsBinding)
                         .disabled(!KeychainService.biometryAvailable)
@@ -206,5 +223,56 @@ struct SettingsView: View {
         } else {
             dismiss() // the vault is locked now; the unlock screen takes over
         }
+    }
+}
+
+// MARK: - Theme swatch
+
+private struct ThemeSwatch: View {
+    let theme: Theme
+    let isSelected: Bool
+    @Environment(\.colorScheme) private var systemScheme
+
+    private var isDark: Bool { (theme.colorScheme ?? systemScheme) == .dark }
+
+    private var previewBackground: Color {
+        theme.windowBackground ?? (isDark ? Color(hex: 0x1E1E1E) : Color(hex: 0xF2F2F7))
+    }
+
+    private var previewText: Color {
+        theme.textPrimary ?? (isDark ? .white : .black)
+    }
+
+    var body: some View {
+        VStack(spacing: 5) {
+            ZStack(alignment: .topLeading) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(previewBackground)
+                VStack(alignment: .leading, spacing: 4) {
+                    Circle()
+                        .fill(theme.resolvedAccent)
+                        .frame(width: 10, height: 10)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(previewText.opacity(0.85))
+                        .frame(width: 36, height: 4)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill((theme.textSecondary ?? previewText).opacity(0.45))
+                        .frame(width: 24, height: 4)
+                }
+                .padding(9)
+            }
+            .frame(height: 54)
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isSelected ? theme.resolvedAccent : Color.primary.opacity(0.15),
+                                  lineWidth: isSelected ? 2 : 1)
+            )
+            Text(theme.name)
+                .font(.caption)
+                .lineLimit(1)
+                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+        }
+        .contentShape(Rectangle())
+        .help(theme.name)
     }
 }

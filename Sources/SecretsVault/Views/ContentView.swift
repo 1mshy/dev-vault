@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var store: VaultStore
+    @EnvironmentObject var themes: ThemeManager
 
     var body: some View {
         Group {
@@ -15,6 +16,8 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 860, minHeight: 540)
+        .themedBackground(themes.current.windowBackground)
+        .themedToolbarBackground(themes.current.windowBackground)
         .alert("Secrets Vault", isPresented: errorBinding) {
             Button("OK") { store.errorMessage = nil }
         } message: {

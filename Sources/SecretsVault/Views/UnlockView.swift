@@ -2,10 +2,13 @@ import SwiftUI
 
 struct UnlockView: View {
     @EnvironmentObject var store: VaultStore
+    @EnvironmentObject var themes: ThemeManager
     @State private var password = ""
     @State private var isWorking = false
     @State private var autoTried = false
     @FocusState private var focused: Bool
+
+    private var theme: Theme { themes.current }
 
     private var canTouchID: Bool {
         store.biometricsEnabled && KeychainService.biometryAvailable
@@ -15,11 +18,12 @@ struct UnlockView: View {
         VStack(spacing: 14) {
             Image(systemName: "lock.fill")
                 .font(.system(size: 50))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(theme.resolvedAccent)
             Text("Secrets Vault")
                 .font(.largeTitle.bold())
+                .foregroundStyle(theme.resolvedTextPrimary)
             Text("The vault is locked")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(theme.resolvedTextSecondary)
 
             SecureField("Master password", text: $password)
                 .textFieldStyle(.roundedBorder)

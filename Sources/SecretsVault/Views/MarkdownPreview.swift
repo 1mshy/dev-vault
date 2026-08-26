@@ -114,6 +114,9 @@ func inlineMarkdown(_ s: String) -> AttributedString {
 
 struct MarkdownPreview: View {
     let text: String
+    @EnvironmentObject var themes: ThemeManager
+
+    private var theme: Theme { themes.current }
 
     var body: some View {
         ScrollView {
@@ -125,6 +128,7 @@ struct MarkdownPreview: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
         }
+        .themedBackground(theme.contentBackground)
     }
 
     @ViewBuilder
@@ -133,10 +137,12 @@ struct MarkdownPreview: View {
         case .heading(let level, let text):
             Text(inlineMarkdown(text))
                 .font(headingFont(level))
+                .foregroundStyle(theme.resolvedHeading)
                 .padding(.top, level <= 2 ? 6 : 2)
                 .textSelection(.enabled)
         case .paragraph(let text):
             Text(inlineMarkdown(text))
+                .foregroundStyle(theme.resolvedTextPrimary)
                 .textSelection(.enabled)
         case .code(let code):
             CodeBlockView(code: code)
@@ -144,8 +150,10 @@ struct MarkdownPreview: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("•").foregroundStyle(.secondary)
-                        Text(inlineMarkdown(item)).textSelection(.enabled)
+                        Text("•").foregroundStyle(theme.resolvedTextSecondary)
+                        Text(inlineMarkdown(item))
+                            .foregroundStyle(theme.resolvedTextPrimary)
+                            .textSelection(.enabled)
                     }
                 }
             }
@@ -153,8 +161,12 @@ struct MarkdownPreview: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { n, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(n + 1).").foregroundStyle(.secondary).monospacedDigit()
-                        Text(inlineMarkdown(item)).textSelection(.enabled)
+                        Text("\(n + 1).")
+                            .foregroundStyle(theme.resolvedTextSecondary)
+                            .monospacedDigit()
+                        Text(inlineMarkdown(item))
+                            .foregroundStyle(theme.resolvedTextPrimary)
+                            .textSelection(.enabled)
                     }
                 }
             }
@@ -162,14 +174,14 @@ struct MarkdownPreview: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
                     Text(inlineMarkdown(line))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(theme.resolvedTextSecondary)
                         .textSelection(.enabled)
                 }
             }
             .padding(.leading, 14)
             .overlay(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.accentColor.opacity(0.6))
+                    .fill(theme.resolvedQuoteBar)
                     .frame(width: 3)
             }
         case .rule:
@@ -189,13 +201,17 @@ struct MarkdownPreview: View {
 
 struct CodeBlockView: View {
     let code: String
+    @EnvironmentObject var themes: ThemeManager
     @State private var copied = false
+
+    private var theme: Theme { themes.current }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(code.isEmpty ? " " : code)
                     .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(theme.resolvedCodeText)
                     .textSelection(.enabled)
                     .padding(12)
             }
@@ -207,7 +223,7 @@ struct CodeBlockView: View {
                 }
             } label: {
                 Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
-                    .foregroundStyle(copied ? Color.green : Color.secondary)
+                    .foregroundStyle(copied ? Color.green : theme.resolvedTextSecondary)
             }
             .buttonStyle(.borderless)
             .help("Copy — clipboard clears after 30 seconds")
@@ -216,11 +232,11 @@ struct CodeBlockView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
+                .fill(theme.resolvedCodeBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08))
+                .strokeBorder(theme.resolvedCodeBorder)
         )
     }
 }
