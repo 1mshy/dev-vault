@@ -30,6 +30,11 @@ final class VaultStore: ObservableObject {
     private var lastActivity = Date()
     private var observers: [NSObjectProtocol] = []
 
+    /// True once the automatic Touch ID prompt has fired for this app launch.
+    /// After a re-lock (idle timeout, screen lock, manual lock) the user must
+    /// click the Touch ID button instead of being prompted automatically.
+    var hasAutoPromptedBiometrics = false
+
     private static let biometricsKey = "biometricsEnabled"
     private static let autoLockKey = "autoLockMinutes"
 

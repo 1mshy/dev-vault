@@ -5,7 +5,6 @@ struct UnlockView: View {
     @EnvironmentObject var themes: ThemeManager
     @State private var password = ""
     @State private var isWorking = false
-    @State private var autoTried = false
     @FocusState private var focused: Bool
 
     private var theme: Theme { themes.current }
@@ -59,8 +58,9 @@ struct UnlockView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { focused = true }
         .task {
-            if canTouchID && !autoTried {
-                autoTried = true
+            // Auto-prompt Touch ID only once per app launch (startup).
+            if canTouchID && !store.hasAutoPromptedBiometrics {
+                store.hasAutoPromptedBiometrics = true
                 isWorking = true
                 await store.unlockWithBiometrics()
                 isWorking = false
