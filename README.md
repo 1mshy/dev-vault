@@ -5,13 +5,19 @@ A native macOS password vault. Your secrets live in organizable **markdown docum
 ## Features
 
 - **AES-256-GCM encryption** — the whole vault is a single encrypted file; nothing is stored in plain text
-- **Master password** — key derived with PBKDF2-HMAC-SHA256 (600,000 iterations, random salt); the password itself is never stored
+- **Argon2id key derivation** (libsodium, "moderate" cost: 3 passes / 256 MB) — the master password is never stored; older PBKDF2 vaults are upgraded automatically on the next password unlock
 - **Touch ID unlock** — opt-in via Settings; the vault key is kept in the Keychain and released with your fingerprint
 - **Markdown documents** — edit in monospace, toggle to a rendered Preview; code blocks get a one-click copy button (handy for passwords and dev commands)
 - **Folders** — organize documents; right-click folders/documents for rename, move, delete
 - **Search** — full-text search across titles and content
-- **Auto-lock** — locks after inactivity (1/5/10/30 min or never, default 10); ⌘L locks instantly
 - **Autosave** — changes are re-encrypted and written to disk ~0.7s after you stop typing
+
+## Security behaviors
+
+- **Locks automatically** when: the screen locks, the Mac (or its displays) goes to sleep, the vault window closes, or the idle timer fires (1/5/10/30 min or never, default 10). ⌘L locks instantly.
+- **Clipboard hygiene** — the Preview copy button marks the pasteboard item as concealed (`org.nspasteboard.ConcealedType`, respected by well-behaved clipboard managers) and clears the clipboard after 30 seconds unless you've copied something else since.
+- **Screen-capture protection** — all app windows are excluded from screenshots and screen sharing (`NSWindow.sharingType = .none`). Note this also blanks your own ⇧⌘4 window captures.
+- The decrypted vault exists **only in memory** while unlocked; locking discards the key and data.
 
 ## Build & install
 
@@ -19,11 +25,32 @@ A native macOS password vault. Your secrets live in organizable **markdown docum
 ./build.sh
 ```
 
-This produces `dist/Secrets Vault.app` (ad-hoc signed). To install:
+This produces `dist/Secrets Vault.app`. To install:
 
 ```
 cp -R "dist/Secrets Vault.app" /Applications/
 ```
+
+### Code signing
+
+`build.sh` picks the best available signature automatically:
+
+1. `$CODESIGN_IDENTITY` if set (`CODESIGN_IDENTITY=adhoc` forces ad-hoc)
+2. A "Developer ID Application" identity, if present (hardened runtime + timestamp)
+3. An "Apple Development" identity, if present (hardened runtime)
+4. Ad-hoc
+
+A real identity gives the app a **stable code signature**, so the Keychain stops re-prompting after rebuilds. With only an ad-hoc signature, macOS may show a keychain permission prompt after each rebuild and Touch ID may need re-enabling (Settings → toggle Touch ID off/on).
+
+Touch ID key storage: the app first tries the **data-protection keychain** with an OS-enforced biometry ACL; where the build lacks the required entitlement (ad-hoc, or a certificate without a provisioning profile), it falls back to a **login-keychain item gated by an in-app Touch ID check** — slightly weaker, enforced by the app rather than the OS.
+
+### Self-test
+
+```
+"dist/Secrets Vault.app/Contents/MacOS/SecretsVault" --selftest
+```
+
+Verifies Argon2id determinism, AES-GCM round-trip, wrong-key rejection, and legacy-envelope decoding. Prints `SELFTEST OK` on success.
 
 ## Usage
 
@@ -33,12 +60,6 @@ cp -R "dist/Secrets Vault.app" /Applications/
 
 ## Where data lives
 
-- Vault file: `~/Library/Application Support/SecretsVault/vault.secrets` (encrypted envelope: salt + iterations + AES-GCM ciphertext, file mode 600)
+- Vault file: `~/Library/Application Support/SecretsVault/vault.secrets` (encrypted envelope: KDF parameters + salt + AES-GCM ciphertext, file mode 600)
 - Back up by copying that file; restoring it on any machine + your master password restores the vault.
-
-## Security model & caveats
-
-- The decrypted vault exists **only in memory** while unlocked; locking discards the key and data.
-- Touch ID: the app first tries the **data-protection keychain** with an OS-enforced biometry ACL. Ad-hoc-signed local builds can't use that keychain, so it falls back to a **login-keychain item gated by an in-app Touch ID check** (slightly weaker: enforced by the app, not the OS). Signing the app with a real Developer ID upgrades this automatically.
-- Because the build is ad-hoc signed, macOS may show a keychain permission prompt after rebuilds, and Touch ID unlock may need re-enabling (Settings → toggle Touch ID off/on).
-- Changing the master password re-encrypts the vault with a fresh salt and key and updates the Touch ID keychain entry.
+- Changing the master password (or the automatic KDF upgrade) re-encrypts the vault with a fresh salt and key and refreshes the Touch ID keychain entry.

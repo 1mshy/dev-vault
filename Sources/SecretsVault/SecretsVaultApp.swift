@@ -6,6 +6,12 @@ import Combine
 struct SecretsVaultApp: App {
     @StateObject private var store = VaultStore()
 
+    init() {
+        if CommandLine.arguments.contains("--selftest") {
+            SelfTest.runAndExit()
+        }
+    }
+
     var body: some Scene {
         WindowGroup("Secrets Vault") {
             ContentView()

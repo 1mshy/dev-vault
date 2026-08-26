@@ -200,8 +200,7 @@ struct CodeBlockView: View {
                     .padding(12)
             }
             Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(code, forType: .string)
+                ClipboardService.copyConcealed(code)
                 withAnimation { copied = true }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                     withAnimation { copied = false }
@@ -211,7 +210,7 @@ struct CodeBlockView: View {
                     .foregroundStyle(copied ? Color.green : Color.secondary)
             }
             .buttonStyle(.borderless)
-            .help("Copy code")
+            .help("Copy — clipboard clears after 30 seconds")
             .padding(8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

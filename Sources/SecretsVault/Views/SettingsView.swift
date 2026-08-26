@@ -30,6 +30,9 @@ struct SettingsView: View {
                         Text("30 minutes").tag(30)
                         Text("Never").tag(0)
                     }
+                    Text("The vault also locks when the screen locks, the Mac sleeps, or the vault window closes.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 Section("Change Master Password") {
                     SecureField("Current password", text: $currentPassword)

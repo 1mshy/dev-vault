@@ -24,7 +24,37 @@ if [ ! -f Resources/AppIcon.icns ]; then
 fi
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
-echo "==> Code signing (ad-hoc)"
-codesign --force --sign - "$APP"
+# Code signing. Preference order:
+#   1. $CODESIGN_IDENTITY if set ("adhoc" forces ad-hoc signing)
+#   2. auto-detected "Developer ID Application" identity
+#   3. auto-detected "Apple Development" identity
+#   4. ad-hoc
+IDENTITY="${CODESIGN_IDENTITY:-}"
+if [ "$IDENTITY" = "adhoc" ]; then
+  IDENTITY=""
+elif [ -z "$IDENTITY" ]; then
+  IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+    | awk -F'"' '/Developer ID Application/ {print $2; exit}')
+  if [ -z "$IDENTITY" ]; then
+    IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+      | awk -F'"' '/Apple Development/ {print $2; exit}')
+  fi
+fi
+
+if [ -n "$IDENTITY" ]; then
+  case "$IDENTITY" in
+    "Developer ID"*) TSFLAG="--timestamp" ;;
+    *)               TSFLAG="--timestamp=none" ;;
+  esac
+  echo "==> Code signing with: $IDENTITY (hardened runtime)"
+  if ! codesign --force --options runtime "$TSFLAG" --sign "$IDENTITY" "$APP"; then
+    echo "    real signing failed — falling back to ad-hoc"
+    codesign --force --sign - "$APP"
+  fi
+else
+  echo "==> Code signing (ad-hoc). Set CODESIGN_IDENTITY or add a signing"
+  echo "    certificate in Xcode for a stable signature across rebuilds."
+  codesign --force --sign - "$APP"
+fi
 
 echo "==> Done: $APP"

@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 import CryptoKit
 import LocalAuthentication
 
@@ -26,6 +27,7 @@ final class VaultStore: ObservableObject {
     private var saveTask: Task<Void, Never>?
     private var autoLockTimer: Timer?
     private var lastActivity = Date()
+    private var observers: [NSObjectProtocol] = []
 
     private static let biometricsKey = "biometricsEnabled"
     private static let autoLockKey = "autoLockMinutes"
@@ -41,19 +43,54 @@ final class VaultStore: ObservableObject {
         biometricsEnabled = UserDefaults.standard.bool(forKey: Self.biometricsKey)
         autoLockMinutes = (UserDefaults.standard.object(forKey: Self.autoLockKey) as? Int) ?? 10
         phase = FileManager.default.fileExists(atPath: Self.fileURL.path) ? .locked : .needsSetup
+        installSecurityObservers()
+    }
+
+    // MARK: - System lock triggers & capture protection
+
+    private func installSecurityObservers() {
+        let lockIfNeeded: () -> Void = { [weak self] in
+            Task { @MainActor in self?.lock() }
+        }
+        // Screen locked → lock the vault.
+        observers.append(DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("com.apple.screenIsLocked"),
+            object: nil, queue: .main) { _ in lockIfNeeded() })
+        // Mac going to sleep / displays sleeping → lock the vault.
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil, queue: .main) { _ in lockIfNeeded() })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidSleepNotification,
+            object: nil, queue: .main) { _ in lockIfNeeded() })
+        // Vault window closed → lock the vault (sheets and panels don't count).
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil, queue: .main) { note in
+            guard let window = note.object as? NSWindow,
+                  !window.isSheet,
+                  window.sheetParent == nil,
+                  !(window is NSPanel) else { return }
+            lockIfNeeded()
+        })
+        // Exclude every app window from screenshots and screen sharing.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil, queue: .main) { note in
+            (note.object as? NSWindow)?.sharingType = .none
+        })
     }
 
     // MARK: - Setup / unlock / lock
 
     func createVault(password: String) async {
         do {
-            let salt = CryptoService.randomSalt()
-            let iterations = CryptoService.defaultIterations
+            let env = CryptoService.newEnvelope()
             let newKey = try await Task.detached(priority: .userInitiated) {
-                try CryptoService.deriveKey(password: password, salt: salt, iterations: iterations)
+                try CryptoService.deriveKey(password: password, envelope: env)
             }.value
             key = newKey
-            envelope = VaultEnvelope(version: 1, salt: salt, iterations: iterations, ciphertext: Data())
+            envelope = env
             data = VaultData.starter()
             try persist()
             phase = .unlocked
@@ -69,9 +106,17 @@ final class VaultStore: ObservableObject {
         do {
             let env = try readEnvelope()
             let derived = try await Task.detached(priority: .userInitiated) {
-                try CryptoService.deriveKey(password: password, salt: env.salt, iterations: env.iterations)
+                try CryptoService.deriveKey(password: password, envelope: env)
             }.value
             try completeUnlock(env: env, candidate: derived)
+            // Transparently upgrade legacy PBKDF2 vaults to Argon2id.
+            if env.effectiveKDF != .argon2id {
+                do {
+                    try await rekey(password: password)
+                } catch {
+                    errorMessage = "Vault KDF upgrade failed: \(error.localizedDescription)"
+                }
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -258,26 +303,31 @@ final class VaultStore: ObservableObject {
         guard let env = envelope, let existingKey = key else { return "Vault is locked." }
         do {
             let checkKey = try await Task.detached { [env] in
-                try CryptoService.deriveKey(password: current, salt: env.salt, iterations: env.iterations)
+                try CryptoService.deriveKey(password: current, envelope: env)
             }.value
             guard CryptoService.keyData(checkKey) == CryptoService.keyData(existingKey) else {
                 return "Current password is incorrect."
             }
-            let salt = CryptoService.randomSalt()
-            let iterations = CryptoService.defaultIterations
-            let newKey = try await Task.detached {
-                try CryptoService.deriveKey(password: new, salt: salt, iterations: iterations)
-            }.value
-            key = newKey
-            envelope = VaultEnvelope(version: 1, salt: salt, iterations: iterations, ciphertext: Data())
-            try persist()
-            if biometricsEnabled {
-                let kd = CryptoService.keyData(newKey)
-                try await Task.detached { try KeychainService.storeKey(kd) }.value
-            }
+            try await rekey(password: new)
             return nil
         } catch {
             return error.localizedDescription
+        }
+    }
+
+    /// Re-encrypts the vault under a fresh Argon2id envelope derived from
+    /// `password`, and refreshes the Touch ID keychain entry if enabled.
+    private func rekey(password: String) async throws {
+        let env = CryptoService.newEnvelope()
+        let newKey = try await Task.detached(priority: .userInitiated) {
+            try CryptoService.deriveKey(password: password, envelope: env)
+        }.value
+        key = newKey
+        envelope = env
+        try persist()
+        if biometricsEnabled {
+            let kd = CryptoService.keyData(newKey)
+            try await Task.detached { try KeychainService.storeKey(kd) }.value
         }
     }
 }
