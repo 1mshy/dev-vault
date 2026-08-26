@@ -35,5 +35,13 @@ struct SecretsVaultApp: App {
                     .disabled(store.phase != .unlocked)
             }
         }
+
+        Settings {
+            SettingsView()
+                .environmentObject(store)
+                .environmentObject(themes)
+                .tint(themes.current.resolvedAccent)
+                .preferredColorScheme(themes.current.colorScheme)
+        }
     }
 }

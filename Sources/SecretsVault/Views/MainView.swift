@@ -4,7 +4,6 @@ struct MainView: View {
     @EnvironmentObject var store: VaultStore
     @EnvironmentObject var themes: ThemeManager
     @State private var searchText = ""
-    @State private var showSettings = false
 
     var body: some View {
         NavigationSplitView {
@@ -19,11 +18,11 @@ struct MainView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    showSettings = true
+                    SettingsWindow.open()
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
-                .help("Settings")
+                .help("Settings (\u{2318},)")
                 Button {
                     store.lock()
                 } label: {
@@ -31,12 +30,6 @@ struct MainView: View {
                 }
                 .help("Lock the vault (⌘L)")
             }
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
-                .environmentObject(store)
-                .environmentObject(themes)
-                .tint(themes.current.resolvedAccent)
         }
         .onChange(of: store.selectedDocumentID) { _ in
             store.touchActivity()

@@ -1,10 +1,70 @@
 import SwiftUI
 import AppKit
 
+/// Opens and closes the app-wide Settings window — the one behind
+/// "Settings…" (⌘,) in the application menu.
+enum SettingsWindow {
+    static func open() {
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    static func close() {
+        NSApp.windows
+            .first { $0.identifier?.rawValue.contains("Settings") == true }?
+            .close()
+    }
+}
+
 struct SettingsView: View {
-    @EnvironmentObject var store: VaultStore
+    var body: some View {
+        TabView {
+            AppearanceSettings()
+                .tabItem { Label("Appearance", systemImage: "paintpalette") }
+            SecuritySettings()
+                .tabItem { Label("Security", systemImage: "lock.shield") }
+            VaultSettings()
+                .tabItem { Label("Vault", systemImage: "externaldrive") }
+            UpdatesSettings()
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
+        }
+        .frame(width: 520)
+    }
+}
+
+// MARK: - Appearance
+
+private struct AppearanceSettings: View {
     @EnvironmentObject var themes: ThemeManager
-    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        Form {
+            Section("Theme") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 10)], spacing: 12) {
+                    ForEach(Theme.all) { theme in
+                        Button {
+                            themes.themeID = theme.id
+                        } label: {
+                            ThemeSwatch(theme: theme, isSelected: theme.id == themes.themeID)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 4)
+                Text("Themes apply instantly and are remembered across launches. System follows the macOS appearance.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(height: 430)
+    }
+}
+
+// MARK: - Security
+
+private struct SecuritySettings: View {
+    @EnvironmentObject var store: VaultStore
 
     @State private var currentPassword = ""
     @State private var newPassword = ""
@@ -12,130 +72,66 @@ struct SettingsView: View {
     @State private var passwordStatus: String?
     @State private var passwordChangeSucceeded = false
     @State private var isChanging = false
-    @State private var showMarkdownWarning = false
-    @State private var showImportConfirm = false
-    @State private var transferStatus: String?
-    @State private var transferSucceeded = false
+
+    private var isUnlocked: Bool { store.phase == .unlocked }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section("Appearance") {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 10)], spacing: 12) {
-                        ForEach(Theme.all) { theme in
-                            Button {
-                                themes.themeID = theme.id
-                            } label: {
-                                ThemeSwatch(theme: theme, isSelected: theme.id == themes.themeID)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    Text("Themes apply instantly and are remembered across launches. System follows the macOS appearance.")
+        Form {
+            if !isUnlocked {
+                LockedNotice(text: "Unlock the vault to change Touch ID or the master password.")
+            }
+            Section("Unlock") {
+                Toggle("Unlock with Touch ID", isOn: biometricsBinding)
+                    .disabled(!KeychainService.biometryAvailable || !isUnlocked)
+                if !KeychainService.biometryAvailable {
+                    Text("Touch ID is not available on this Mac.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Section("Security") {
-                    Toggle("Unlock with Touch ID", isOn: biometricsBinding)
-                        .disabled(!KeychainService.biometryAvailable)
-                    if !KeychainService.biometryAvailable {
-                        Text("Touch ID is not available on this Mac.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Picker("Auto-lock after", selection: $store.autoLockMinutes) {
-                        Text("1 minute").tag(1)
-                        Text("5 minutes").tag(5)
-                        Text("10 minutes").tag(10)
-                        Text("30 minutes").tag(30)
-                        Text("Never").tag(0)
-                    }
-                    Text("The vault also locks when the screen locks, the Mac sleeps, or the vault window closes.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            }
+            Section("Auto-Lock") {
+                Picker("Auto-lock after", selection: $store.autoLockMinutes) {
+                    Text("1 minute").tag(1)
+                    Text("5 minutes").tag(5)
+                    Text("10 minutes").tag(10)
+                    Text("30 minutes").tag(30)
+                    Text("Never").tag(0)
                 }
-                Section("Change Master Password") {
-                    SecureField("Current password", text: $currentPassword)
-                    SecureField("New password (min 8 characters)", text: $newPassword)
-                    SecureField("Confirm new password", text: $confirmPassword)
-                    HStack(spacing: 10) {
-                        Button("Change Password") { change() }
-                            .disabled(isChanging
-                                      || currentPassword.isEmpty
-                                      || newPassword.count < 8
-                                      || newPassword != confirmPassword)
-                        if isChanging {
-                            ProgressView().controlSize(.small)
-                        }
-                        if let status = passwordStatus {
-                            Text(status)
-                                .font(.caption)
-                                .foregroundStyle(passwordChangeSucceeded ? Color.green : Color.red)
-                        }
+                Text("The vault also locks when the screen locks, the Mac sleeps, or the vault window closes. ⌘L locks instantly.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Master Password") {
+                SecureField("Current password", text: $currentPassword)
+                SecureField("New password (min 8 characters)", text: $newPassword)
+                SecureField("Confirm new password", text: $confirmPassword)
+                HStack(spacing: 10) {
+                    Button("Change Password") { change() }
+                        .disabled(isChanging
+                                  || currentPassword.isEmpty
+                                  || newPassword.count < 8
+                                  || newPassword != confirmPassword)
+                    if isChanging {
+                        ProgressView().controlSize(.small)
                     }
-                    if !newPassword.isEmpty && newPassword.count < 8 {
-                        Text("Use at least 8 characters.")
-                            .font(.caption).foregroundStyle(.orange)
-                    } else if !confirmPassword.isEmpty && newPassword != confirmPassword {
-                        Text("Passwords don't match.")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
-                }
-                Section("Export & Import") {
-                    Button("Export Encrypted Copy…") { exportEncrypted() }
-                    Text("A copy of the vault file, still encrypted with your master password — for moving to another Mac or keeping an off-machine backup.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Export as Plain Markdown…") { showMarkdownWarning = true }
-                    Text("Writes every document as an unencrypted .md file.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Import Vault…") { showImportConfirm = true }
-                    Text("Replaces this vault with an exported copy or a rotated backup, then locks the app.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if let status = transferStatus {
+                    if let status = passwordStatus {
                         Text(status)
                             .font(.caption)
-                            .foregroundStyle(transferSucceeded ? Color.green : Color.red)
+                            .foregroundStyle(passwordChangeSucceeded ? Color.green : Color.red)
                     }
                 }
-                Section("Storage") {
-                    LabeledContent("Vault file", value: VaultStore.fileURL.path)
-                    LabeledContent("Backups", value: backupSummary)
-                    Text("Before each overwrite the previous vault file is rotated into vault.secrets.1…\(VaultStore.backupCount) next to the vault (at most once every 5 minutes). Recently Deleted documents are purged after \(VaultStore.deletedRetentionDays) days.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Button("Reveal in Finder") {
-                        NSWorkspace.shared.activateFileViewerSelecting([VaultStore.fileURL])
-                    }
+                if !newPassword.isEmpty && newPassword.count < 8 {
+                    Text("Use at least 8 characters.")
+                        .font(.caption).foregroundStyle(.orange)
+                } else if !confirmPassword.isEmpty && newPassword != confirmPassword {
+                    Text("Passwords don't match.")
+                        .font(.caption).foregroundStyle(.orange)
                 }
             }
-            .formStyle(.grouped)
-
-            Divider()
-
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(12)
+            .disabled(!isUnlocked)
         }
-        .frame(width: 480, height: 560)
-        .alert("Export Unencrypted Markdown?", isPresented: $showMarkdownWarning) {
-            Button("Export Anyway", role: .destructive) { exportMarkdown() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Every document — including any passwords and secrets — will be written to disk as plain, unencrypted text. Anyone with access to the exported files can read everything. Only continue if you understand the risk.")
-        }
-        .alert("Replace This Vault?", isPresented: $showImportConfirm) {
-            Button("Choose File…", role: .destructive) { chooseAndImportVault() }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The imported vault replaces the current one and the app locks. You will need the imported vault's master password to unlock it. The current vault is kept as backup 1 (vault.secrets.1).")
-        }
+        .formStyle(.grouped)
+        .frame(height: 500)
     }
 
     private var biometricsBinding: Binding<Bool> {
@@ -165,6 +161,74 @@ struct SettingsView: View {
                 newPassword = ""
                 confirmPassword = ""
             }
+        }
+    }
+}
+
+// MARK: - Vault
+
+private struct VaultSettings: View {
+    @EnvironmentObject var store: VaultStore
+
+    @State private var showMarkdownWarning = false
+    @State private var showImportConfirm = false
+    @State private var transferStatus: String?
+    @State private var transferSucceeded = false
+
+    private var isUnlocked: Bool { store.phase == .unlocked }
+
+    var body: some View {
+        Form {
+            if !isUnlocked {
+                LockedNotice(text: "Unlock the vault to export. Importing works while locked.")
+            }
+            Section("Export") {
+                Button("Export Encrypted Copy…") { exportEncrypted() }
+                    .disabled(!isUnlocked)
+                Text("A copy of the vault file, still encrypted with your master password — for moving to another Mac or keeping an off-machine backup.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Export as Plain Markdown…") { showMarkdownWarning = true }
+                    .disabled(!isUnlocked)
+                Text("Writes every document as an unencrypted .md file.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Import") {
+                Button("Import Vault…") { showImportConfirm = true }
+                Text("Replaces this vault with an exported copy or a rotated backup, then locks the app.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let status = transferStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(transferSucceeded ? Color.green : Color.red)
+                }
+            }
+            Section("Storage") {
+                LabeledContent("Vault file", value: VaultStore.fileURL.path)
+                LabeledContent("Backups", value: backupSummary)
+                Text("Before each overwrite the previous vault file is rotated into vault.secrets.1…\(VaultStore.backupCount) next to the vault (at most once every 5 minutes). Recently Deleted documents are purged after \(VaultStore.deletedRetentionDays) days.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([VaultStore.fileURL])
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(height: 540)
+        .alert("Export Unencrypted Markdown?", isPresented: $showMarkdownWarning) {
+            Button("Export Anyway", role: .destructive) { exportMarkdown() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every document — including any passwords and secrets — will be written to disk as plain, unencrypted text. Anyone with access to the exported files can read everything. Only continue if you understand the risk.")
+        }
+        .alert("Replace This Vault?", isPresented: $showImportConfirm) {
+            Button("Choose File…", role: .destructive) { chooseAndImportVault() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The imported vault replaces the current one and the app locks. You will need the imported vault's master password to unlock it. The current vault is kept as backup 1 (vault.secrets.1).")
         }
     }
 
@@ -221,7 +285,90 @@ struct SettingsView: View {
             transferSucceeded = false
             transferStatus = error
         } else {
-            dismiss() // the vault is locked now; the unlock screen takes over
+            // The vault is locked now; the unlock screen takes over.
+            SettingsWindow.close()
+        }
+    }
+}
+
+// MARK: - Updates
+
+private struct UpdatesSettings: View {
+    @StateObject private var updater = UpdateService()
+
+    var body: some View {
+        Form {
+            Section("Version") {
+                LabeledContent("Installed",
+                               value: UpdateService.currentVersion ?? "dev (unbundled)")
+                LabeledContent("Source",
+                               value: "github.com/\(UpdateService.owner)/\(UpdateService.repo)")
+            }
+            Section("Updates") {
+                switch updater.phase {
+                case .idle:
+                    Button("Check for Updates") { updater.check() }
+                    Text("Checks the latest GitHub release. Nothing is downloaded until you choose to update.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .checking:
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking for updates…").foregroundStyle(.secondary)
+                    }
+                case .upToDate(let latest):
+                    Button("Check for Updates") { updater.check() }
+                    Text("You're up to date (latest release is \(latest)).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                case .available(let release):
+                    HStack(spacing: 10) {
+                        Button("Update to \(release.tag) & Relaunch") {
+                            updater.downloadAndInstall(release)
+                        }
+                        .disabled(!updater.canUpdate)
+                        if let page = release.pageURL {
+                            Link("Release notes", destination: page)
+                                .font(.caption)
+                        }
+                    }
+                    if updater.canUpdate {
+                        Text("Downloads the update from GitHub, replaces the app in place and relaunches it. The vault saves and locks when the app quits.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Running an unbundled dev binary — build with ./build.sh to enable in-app updates.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                case .downloading:
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("Downloading and installing…").foregroundStyle(.secondary)
+                    }
+                case .failed(let message):
+                    Button("Check for Updates") { updater.check() }
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(height: 280)
+    }
+}
+
+// MARK: - Shared pieces
+
+private struct LockedNotice: View {
+    let text: String
+
+    var body: some View {
+        Section {
+            Label(text, systemImage: "lock.fill")
+                .font(.callout)
+                .foregroundStyle(.secondary)
         }
     }
 }

@@ -11,6 +11,14 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/SecretsVault "$APP/Contents/MacOS/SecretsVault"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
+# Version stamp — read by the in-app updater. Releases use <VERSION file>.<commit
+# count> (see scripts/release.sh); override with APP_VERSION=x.y.z ./build.sh
+BASE="$(cat VERSION 2>/dev/null || echo 1.0)"
+VERSION="${APP_VERSION:-$BASE.$(git rev-list --count HEAD 2>/dev/null || echo 0)}"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION##*.}" "$APP/Contents/Info.plist"
+echo "==> Version: $VERSION"
+
 # App icon (generated once, then reused)
 if [ ! -f Resources/AppIcon.icns ]; then
   echo "==> Generating app icon"

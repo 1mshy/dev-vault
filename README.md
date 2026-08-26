@@ -55,6 +55,37 @@ Touch ID key storage: the app first tries the **data-protection keychain** with 
 
 Verifies Argon2id determinism, AES-GCM round-trip, wrong-key rejection, and legacy-envelope decoding. Prints `SELFTEST OK` on success.
 
+## Auto-update & releases
+
+**In-app updates** — Settings → Updates → *Check for Updates* asks GitHub for the
+latest release of `1mshy/dev-vault`; one click then downloads it, swaps the app
+bundle in place and relaunches (the vault saves and locks on quit, as always).
+Updating requires running from a real `.app` bundle in a folder you can write to.
+
+**Publishing runs locally** via a git hook — on every push to `main`:
+
+1. `scripts/git-hooks/pre-push` builds `dist/Secrets Vault.app` and zips it
+   (a broken build aborts the push; bypass with `git push --no-verify`)
+2. once the pushed commit is visible on `origin/main`, a background job creates
+   the `v<version>` tag + GitHub release with the zip attached
+   (log: `dist/release-v<version>.log`)
+
+Versions are `MAJOR.MINOR.PATCH`: `MAJOR.MINOR` comes from the `VERSION` file,
+`PATCH` is the commit count — edit `VERSION` to bump major/minor. `build.sh`
+stamps the same version into the built app's Info.plist so the updater can
+compare. A release can also be (re)published by hand: `scripts/release.sh [sha]`.
+
+One-time setup per clone (already done in this one):
+
+```
+git config core.hooksPath scripts/git-hooks   # install the hook
+gh auth login                                 # releases are published with gh
+```
+
+Note: with an ad-hoc code signature, each update looks like a "new" app to the
+Keychain, so Touch ID may need re-enabling after an update — a real signing
+identity avoids this (see Code signing above).
+
 ## Usage
 
 1. First launch: create a master password (min 8 characters). **It cannot be recovered** — if you forget it, the vault contents are lost.
