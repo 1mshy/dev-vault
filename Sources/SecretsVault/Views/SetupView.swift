@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SetupView: View {
     @EnvironmentObject var store: VaultStore
@@ -49,6 +50,10 @@ struct SetupView: View {
             .controlSize(.large)
             .disabled(!valid || isWorking)
 
+            Button("Import Existing Vault…") { importExisting() }
+                .buttonStyle(.link)
+                .disabled(isWorking)
+
             Text("Your vault is encrypted with AES-256. The master password cannot be recovered — if you forget it, the vault contents are lost.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -65,6 +70,19 @@ struct SetupView: View {
         Task {
             await store.createVault(password: pw)
             isWorking = false
+        }
+    }
+
+    private func importExisting() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Vault"
+        panel.message = "Choose a Secrets Vault export (.secrets) copied from another Mac."
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let error = store.importVault(from: url) {
+            store.errorMessage = error
         }
     }
 }

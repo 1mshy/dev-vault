@@ -11,6 +11,9 @@ A native macOS password vault. Your secrets live in organizable **markdown docum
 - **Folders** — organize documents; right-click folders/documents for rename, move, delete
 - **Search** — full-text search across titles and content
 - **Autosave** — changes are re-encrypted and written to disk ~0.7s after you stop typing
+- **Backup rotation** — before the vault file is overwritten, the previous (known-good) copy is rotated into `vault.secrets.1`…`.5` next to it, so a corrupted write can never destroy the only copy (at most one rotation every 5 minutes)
+- **Recently Deleted** — deleting a document moves it to a Recently Deleted section in the sidebar, where it can be previewed, restored, or deleted permanently; items are purged automatically after 30 days
+- **Export & import** — export an encrypted copy of the vault (Settings) for moving machines or off-site backup, and import it on another Mac (Settings, or "Import Existing Vault…" on first launch); an optional plain-markdown export exists behind a loud warning
 
 ## Security behaviors
 
@@ -61,5 +64,6 @@ Verifies Argon2id determinism, AES-GCM round-trip, wrong-key rejection, and lega
 ## Where data lives
 
 - Vault file: `~/Library/Application Support/SecretsVault/vault.secrets` (encrypted envelope: KDF parameters + salt + AES-GCM ciphertext, file mode 600)
-- Back up by copying that file; restoring it on any machine + your master password restores the vault.
-- Changing the master password (or the automatic KDF upgrade) re-encrypts the vault with a fresh salt and key and refreshes the Touch ID keychain entry.
+- Rotated backups: `vault.secrets.1` (newest) … `vault.secrets.5` (oldest), same directory, same format and password. Restore one via Settings → Import Vault…, or by copying it over `vault.secrets` while the app is closed.
+- Back up off-machine with Settings → Export Encrypted Copy…; importing that file on any machine + your master password restores the vault.
+- Changing the master password (or the automatic KDF upgrade) re-encrypts the vault with a fresh salt and key, refreshes the Touch ID keychain entry, and deletes the rotated backups (they are encrypted under the previous password and would silently undermine the change).

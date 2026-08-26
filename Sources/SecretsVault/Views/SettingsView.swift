@@ -11,6 +11,10 @@ struct SettingsView: View {
     @State private var passwordStatus: String?
     @State private var passwordChangeSucceeded = false
     @State private var isChanging = false
+    @State private var showMarkdownWarning = false
+    @State private var showImportConfirm = false
+    @State private var transferStatus: String?
+    @State private var transferSucceeded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,8 +65,31 @@ struct SettingsView: View {
                             .font(.caption).foregroundStyle(.orange)
                     }
                 }
+                Section("Export & Import") {
+                    Button("Export Encrypted Copy…") { exportEncrypted() }
+                    Text("A copy of the vault file, still encrypted with your master password — for moving to another Mac or keeping an off-machine backup.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Export as Plain Markdown…") { showMarkdownWarning = true }
+                    Text("Writes every document as an unencrypted .md file.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Import Vault…") { showImportConfirm = true }
+                    Text("Replaces this vault with an exported copy or a rotated backup, then locks the app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let status = transferStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(transferSucceeded ? Color.green : Color.red)
+                    }
+                }
                 Section("Storage") {
                     LabeledContent("Vault file", value: VaultStore.fileURL.path)
+                    LabeledContent("Backups", value: backupSummary)
+                    Text("Before each overwrite the previous vault file is rotated into vault.secrets.1…\(VaultStore.backupCount) next to the vault (at most once every 5 minutes). Recently Deleted documents are purged after \(VaultStore.deletedRetentionDays) days.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Button("Reveal in Finder") {
                         NSWorkspace.shared.activateFileViewerSelecting([VaultStore.fileURL])
                     }
@@ -79,7 +106,19 @@ struct SettingsView: View {
             }
             .padding(12)
         }
-        .frame(width: 480, height: 520)
+        .frame(width: 480, height: 560)
+        .alert("Export Unencrypted Markdown?", isPresented: $showMarkdownWarning) {
+            Button("Export Anyway", role: .destructive) { exportMarkdown() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every document — including any passwords and secrets — will be written to disk as plain, unencrypted text. Anyone with access to the exported files can read everything. Only continue if you understand the risk.")
+        }
+        .alert("Replace This Vault?", isPresented: $showImportConfirm) {
+            Button("Choose File…", role: .destructive) { chooseAndImportVault() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The imported vault replaces the current one and the app locks. You will need the imported vault's master password to unlock it. The current vault is kept as backup 1 (vault.secrets.1).")
+        }
     }
 
     private var biometricsBinding: Binding<Bool> {
@@ -109,6 +148,63 @@ struct SettingsView: View {
                 newPassword = ""
                 confirmPassword = ""
             }
+        }
+    }
+
+    private static var dateStamp: String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd-HHmm"
+        return f.string(from: Date())
+    }
+
+    private var backupSummary: String {
+        let backups = VaultStore.existingBackups()
+        guard let newest = backups.first else { return "None yet" }
+        return "\(backups.count) of \(VaultStore.backupCount) · newest \(newest.date.formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    private func exportEncrypted() {
+        let panel = NSSavePanel()
+        panel.title = "Export Encrypted Vault"
+        panel.nameFieldStringValue = "SecretsVault-\(Self.dateStamp).secrets"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        transferSucceeded = store.exportEncryptedVault(to: url)
+        transferStatus = transferSucceeded ? "Encrypted copy exported." : nil
+    }
+
+    private func exportMarkdown() {
+        let panel = NSOpenPanel()
+        panel.title = "Export as Plain Markdown"
+        panel.message = "Choose where to create the (unencrypted) export folder."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Export Here"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let dir = url.appendingPathComponent("Secrets Vault Export \(Self.dateStamp)", isDirectory: true)
+        if let count = store.exportMarkdown(to: dir) {
+            transferSucceeded = true
+            transferStatus = "\(count) document\(count == 1 ? "" : "s") exported as plain markdown."
+            NSWorkspace.shared.activateFileViewerSelecting([dir])
+        } else {
+            transferStatus = nil
+        }
+    }
+
+    private func chooseAndImportVault() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Vault"
+        panel.message = "Choose a Secrets Vault export or a rotated backup (vault.secrets.1…\(VaultStore.backupCount))."
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if let error = store.importVault(from: url) {
+            transferSucceeded = false
+            transferStatus = error
+        } else {
+            dismiss() // the vault is locked now; the unlock screen takes over
         }
     }
 }

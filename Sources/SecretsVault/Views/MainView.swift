@@ -48,7 +48,8 @@ struct SidebarView: View {
     @State private var renameTarget: VaultFolder?
     @State private var renameText = ""
     @State private var deleteFolderTarget: VaultFolder?
-    @State private var deleteDocTarget: VaultDocument?
+    @State private var purgeDocTarget: VaultDocument?
+    @State private var showEmptyTrashConfirm = false
 
     private var sortedFolders: [VaultFolder] {
         store.data.folders.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -102,6 +103,13 @@ struct SidebarView: View {
                         }
                     }
                 }
+                if !store.deletedDocuments.isEmpty {
+                    Section("Recently Deleted") {
+                        ForEach(store.deletedDocuments) { doc in
+                            deletedDocumentRow(doc)
+                        }
+                    }
+                }
             }
         }
         .listStyle(.sidebar)
@@ -144,14 +152,20 @@ struct SidebarView: View {
         } message: {
             Text("Documents inside \u{201C}\(deleteFolderTarget?.name ?? "")\u{201D} will be moved to Documents.")
         }
-        .alert("Delete Document?", isPresented: presentBinding($deleteDocTarget)) {
-            Button("Delete", role: .destructive) {
-                if let d = deleteDocTarget { store.deleteDocument(d.id) }
-                deleteDocTarget = nil
+        .alert("Delete Permanently?", isPresented: presentBinding($purgeDocTarget)) {
+            Button("Delete Permanently", role: .destructive) {
+                if let d = purgeDocTarget { store.purgeDocument(d.id) }
+                purgeDocTarget = nil
             }
-            Button("Cancel", role: .cancel) { deleteDocTarget = nil }
+            Button("Cancel", role: .cancel) { purgeDocTarget = nil }
         } message: {
-            Text("\u{201C}\(deleteDocTarget?.title ?? "")\u{201D} will be permanently removed from the vault.")
+            Text("\u{201C}\(purgeDocTarget?.title ?? "")\u{201D} will be removed from the vault forever. This cannot be undone.")
+        }
+        .alert("Empty Recently Deleted?", isPresented: $showEmptyTrashConfirm) {
+            Button("Delete All Permanently", role: .destructive) { store.emptyRecentlyDeleted() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All \(store.deletedDocuments.count) documents in Recently Deleted will be removed forever. This cannot be undone.")
         }
     }
 
@@ -167,7 +181,19 @@ struct SidebarView: View {
                     }
                 }
                 Divider()
-                Button("Delete…", role: .destructive) { deleteDocTarget = doc }
+                Button("Delete", role: .destructive) { store.deleteDocument(doc.id) }
+            }
+    }
+
+    private func deletedDocumentRow(_ doc: VaultDocument) -> some View {
+        Label(doc.title.isEmpty ? "Untitled" : doc.title, systemImage: "trash")
+            .foregroundStyle(.secondary)
+            .tag(Optional(doc.id))
+            .contextMenu {
+                Button("Restore") { store.restoreDocument(doc.id) }
+                Divider()
+                Button("Delete Permanently…", role: .destructive) { purgeDocTarget = doc }
+                Button("Empty Recently Deleted…", role: .destructive) { showEmptyTrashConfirm = true }
             }
     }
 
@@ -194,8 +220,13 @@ struct DetailView: View {
     var body: some View {
         if let selected = store.selectedDocumentID,
            let idx = store.data.documents.firstIndex(where: { $0.id == selected }) {
-            DocumentEditor(document: $store.data.documents[idx])
-                .id(selected)
+            if store.data.documents[idx].deletedAt != nil {
+                DeletedDocumentView(document: store.data.documents[idx])
+                    .id(selected)
+            } else {
+                DocumentEditor(document: $store.data.documents[idx])
+                    .id(selected)
+            }
         } else {
             EmptySelectionView()
         }
@@ -216,5 +247,55 @@ struct EmptySelectionView: View {
                 .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+struct DeletedDocumentView: View {
+    @EnvironmentObject var store: VaultStore
+    let document: VaultDocument
+    @State private var confirmPurge = false
+
+    private var displayTitle: String {
+        document.title.isEmpty ? "Untitled" : document.title
+    }
+
+    private var purgeDate: Date {
+        (document.deletedAt ?? Date())
+            .addingTimeInterval(Double(VaultStore.deletedRetentionDays) * 86_400)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Text(displayTitle)
+                    .font(.title2.bold())
+                    .lineLimit(1)
+                Spacer()
+                Button("Restore") { store.restoreDocument(document.id) }
+                Button("Delete Permanently…", role: .destructive) { confirmPurge = true }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            HStack(spacing: 6) {
+                Image(systemName: "trash")
+                Text("In Recently Deleted — removed forever on \(purgeDate.formatted(date: .abbreviated, time: .omitted)). Restore to edit.")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.05))
+
+            MarkdownPreview(text: document.content)
+        }
+        .alert("Delete Permanently?", isPresented: $confirmPurge) {
+            Button("Delete Permanently", role: .destructive) { store.purgeDocument(document.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\u{201C}\(displayTitle)\u{201D} will be removed from the vault forever. This cannot be undone.")
+        }
     }
 }

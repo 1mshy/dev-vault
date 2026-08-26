@@ -12,6 +12,9 @@ struct VaultDocument: Identifiable, Codable, Hashable {
     var folderID: UUID?
     var createdAt = Date()
     var updatedAt = Date()
+    /// Set when the document is moved to Recently Deleted; nil for live
+    /// documents. Optional, so vaults written before this field decode fine.
+    var deletedAt: Date?
 }
 
 struct VaultData: Codable {
