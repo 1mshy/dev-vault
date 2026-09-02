@@ -1,27 +1,50 @@
 import Foundation
 
-struct VaultFolder: Identifiable, Codable, Hashable {
-    var id = UUID()
-    var name: String
+public struct VaultFolder: Identifiable, Codable, Hashable {
+    public var id: UUID
+    public var name: String
+
+    public init(id: UUID = UUID(), name: String) {
+        self.id = id
+        self.name = name
+    }
 }
 
-struct VaultDocument: Identifiable, Codable, Hashable {
-    var id = UUID()
-    var title: String
-    var content: String
-    var folderID: UUID?
-    var createdAt = Date()
-    var updatedAt = Date()
+public struct VaultDocument: Identifiable, Codable, Hashable {
+    public var id: UUID
+    public var title: String
+    public var content: String
+    public var folderID: UUID?
+    public var createdAt: Date
+    public var updatedAt: Date
     /// Set when the document is moved to Recently Deleted; nil for live
     /// documents. Optional, so vaults written before this field decode fine.
-    var deletedAt: Date?
+    public var deletedAt: Date?
+
+    public init(id: UUID = UUID(), title: String, content: String, folderID: UUID? = nil,
+                createdAt: Date = Date(), updatedAt: Date = Date(), deletedAt: Date? = nil) {
+        self.id = id
+        self.title = title
+        self.content = content
+        self.folderID = folderID
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.deletedAt = deletedAt
+    }
 }
 
-struct VaultData: Codable {
-    var folders: [VaultFolder] = []
-    var documents: [VaultDocument] = []
+/// The decrypted contents of a vault file. Folder and document operations
+/// live in `VaultData+Operations.swift`.
+public struct VaultData: Codable {
+    public var folders: [VaultFolder]
+    public var documents: [VaultDocument]
 
-    static func starter() -> VaultData {
+    public init(folders: [VaultFolder] = [], documents: [VaultDocument] = []) {
+        self.folders = folders
+        self.documents = documents
+    }
+
+    public static func starter() -> VaultData {
         let passwords = VaultFolder(name: "Passwords")
         let dev = VaultFolder(name: "Dev Commands")
         let welcome = VaultDocument(

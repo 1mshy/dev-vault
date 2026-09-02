@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import CryptoKit
 import LocalAuthentication
+import SecretsVaultCore
 
 @MainActor
 final class VaultStore: ObservableObject {
@@ -167,19 +168,9 @@ final class VaultStore: ObservableObject {
 
     // MARK: - Setup / unlock / lock
 
-    static func sanitizedVaultName(_ raw: String) -> String {
-        var cleaned = raw
-            .components(separatedBy: CharacterSet(charactersIn: "/:\\"))
-            .joined(separator: "-")
-            .trimmingCharacters(in: .whitespaces)
-        cleaned = String(cleaned.prefix(60))
-        while cleaned.hasPrefix(".") { cleaned.removeFirst() }
-        return cleaned
-    }
-
     /// True when `raw` sanitizes to a usable name no existing vault uses.
     func vaultNameAvailable(_ raw: String) -> Bool {
-        let name = Self.sanitizedVaultName(raw)
+        let name = VaultNaming.sanitizedVaultName(raw)
         guard !name.isEmpty else { return false }
         return !FileManager.default.fileExists(atPath: Self.fileURL(for: name).path)
     }
@@ -218,7 +209,7 @@ final class VaultStore: ObservableObject {
     }
 
     func createVault(named rawName: String, password: String) async {
-        let name = Self.sanitizedVaultName(rawName)
+        let name = VaultNaming.sanitizedVaultName(rawName)
         guard !name.isEmpty else {
             errorMessage = "Enter a name for the vault."
             return
@@ -332,10 +323,18 @@ final class VaultStore: ObservableObject {
 
     /// Locks the vault. Pass `save: false` to discard in-memory state
     /// without writing it back (used after an import replaces the file).
+    ///
+    /// If pending changes cannot be written, the vault stays unlocked and the
+    /// error is surfaced: discarding the in-memory copy would be the only way
+    /// to lose data. The idle clock is reset so the auto-lock timer retries
+    /// after another full idle period instead of re-alerting every tick.
     func lock(save: Bool = true) {
         guard phase == .unlocked else { return }
         saveTask?.cancel()
-        if save { saveNow() }
+        if save && !saveNow() {
+            touchActivity()
+            return
+        }
         key = nil
         data = VaultData()
         selectedDocumentID = nil
@@ -373,11 +372,16 @@ final class VaultStore: ObservableObject {
         }
     }
 
-    func saveNow() {
+    /// Writes the vault to disk immediately. Returns false, with
+    /// `errorMessage` set, when the write failed.
+    @discardableResult
+    func saveNow() -> Bool {
         do {
             try persist()
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -402,26 +406,17 @@ final class VaultStore: ObservableObject {
     }
 
     // MARK: - Documents & folders
+    //
+    // The list/folder logic itself lives on `VaultData` (SecretsVaultCore) so
+    // it can be unit-tested; the store adds selection handling and autosave.
 
-    func documents(in folderID: UUID?) -> [VaultDocument] {
-        data.documents
-            .filter { $0.deletedAt == nil && $0.folderID == folderID }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-    }
+    func documents(in folderID: UUID?) -> [VaultDocument] { data.documents(in: folderID) }
 
-    func searchResults(_ query: String) -> [VaultDocument] {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return [] }
-        return data.documents
-            .filter { $0.deletedAt == nil }
-            .filter { $0.title.localizedCaseInsensitiveContains(q) || $0.content.localizedCaseInsensitiveContains(q) }
-            .sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
-    }
+    func searchResults(_ query: String) -> [VaultDocument] { data.searchResults(query) }
 
     func addDocument(in folderID: UUID?) {
         guard phase == .unlocked else { return }
-        let doc = VaultDocument(title: "", content: "", folderID: folderID)
-        data.documents.append(doc)
+        let doc = data.addDocument(in: folderID)
         selectedDocumentID = doc.id
         scheduleSave()
     }
@@ -429,8 +424,7 @@ final class VaultStore: ObservableObject {
     /// Soft delete: the document moves to Recently Deleted, where it stays
     /// recoverable for `deletedRetentionDays` days.
     func deleteDocument(_ id: UUID) {
-        guard let idx = data.documents.firstIndex(where: { $0.id == id }) else { return }
-        data.documents[idx].deletedAt = Date()
+        guard data.softDelete(id) else { return }
         if selectedDocumentID == id { selectedDocumentID = nil }
         scheduleSave()
     }
@@ -440,75 +434,52 @@ final class VaultStore: ObservableObject {
     /// Days a deleted document stays recoverable before automatic purge.
     static let deletedRetentionDays = 30
 
-    var deletedDocuments: [VaultDocument] {
-        data.documents
-            .filter { $0.deletedAt != nil }
-            .sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
-    }
+    var deletedDocuments: [VaultDocument] { data.deletedDocuments }
 
     func restoreDocument(_ id: UUID) {
-        guard let idx = data.documents.firstIndex(where: { $0.id == id }) else { return }
-        data.documents[idx].deletedAt = nil
-        // If its folder was deleted in the meantime, restore to Documents.
-        if let folderID = data.documents[idx].folderID,
-           !data.folders.contains(where: { $0.id == folderID }) {
-            data.documents[idx].folderID = nil
-        }
+        guard data.restore(id) else { return }
         scheduleSave()
     }
 
     /// Permanently removes a single document. Not undoable.
     func purgeDocument(_ id: UUID) {
-        data.documents.removeAll { $0.id == id }
+        data.purge(id)
         if selectedDocumentID == id { selectedDocumentID = nil }
         scheduleSave()
     }
 
     /// Permanently removes everything in Recently Deleted. Not undoable.
     func emptyRecentlyDeleted() {
-        if let sel = selectedDocumentID,
-           data.documents.first(where: { $0.id == sel })?.deletedAt != nil {
+        if let sel = selectedDocumentID, data.document(sel)?.deletedAt != nil {
             selectedDocumentID = nil
         }
-        data.documents.removeAll { $0.deletedAt != nil }
+        data.emptyRecentlyDeleted()
         scheduleSave()
     }
 
     private func purgeExpiredDeleted() {
-        let cutoff = Date().addingTimeInterval(-Double(Self.deletedRetentionDays) * 86_400)
-        let before = data.documents.count
-        data.documents.removeAll {
-            guard let deletedAt = $0.deletedAt else { return false }
-            return deletedAt < cutoff
+        if data.purgeExpiredDeleted(retentionDays: Self.deletedRetentionDays) > 0 {
+            scheduleSave()
         }
-        if data.documents.count != before { scheduleSave() }
     }
 
     func moveDocument(_ id: UUID, to folderID: UUID?) {
-        guard let idx = data.documents.firstIndex(where: { $0.id == id }) else { return }
-        data.documents[idx].folderID = folderID
+        guard data.move(id, to: folderID) else { return }
         scheduleSave()
     }
 
     func addFolder(named name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        data.folders.append(VaultFolder(name: trimmed))
+        guard data.addFolder(named: name) != nil else { return }
         scheduleSave()
     }
 
     func renameFolder(_ id: UUID, to name: String) {
-        let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, let idx = data.folders.firstIndex(where: { $0.id == id }) else { return }
-        data.folders[idx].name = trimmed
+        guard data.renameFolder(id, to: name) else { return }
         scheduleSave()
     }
 
     func deleteFolder(_ id: UUID) {
-        for i in data.documents.indices where data.documents[i].folderID == id {
-            data.documents[i].folderID = nil
-        }
-        data.folders.removeAll { $0.id == id }
+        data.deleteFolder(id)
         scheduleSave()
     }
 
@@ -627,7 +598,7 @@ final class VaultStore: ObservableObject {
     /// file, openable with this vault's master password. Returns success.
     func exportEncryptedVault(to url: URL) -> Bool {
         guard phase == .unlocked else { return false }
-        saveNow() // flush pending edits so the copy is current
+        guard saveNow() else { return false } // flush pending edits so the copy is current
         do {
             let raw = try Data(contentsOf: fileURL)
             try raw.write(to: url, options: [.atomic])
@@ -651,7 +622,7 @@ final class VaultStore: ObservableObject {
             var folderURLs: [UUID?: URL] = [nil: directory]
             var usedDirNames: Set<String> = []
             for folder in data.folders {
-                let name = Self.uniqueName(Self.sanitizedFilename(folder.name), used: &usedDirNames)
+                let name = VaultNaming.uniqueName(VaultNaming.sanitizedFilename(folder.name), used: &usedDirNames)
                 let sub = directory.appendingPathComponent(name, isDirectory: true)
                 try fm.createDirectory(at: sub, withIntermediateDirectories: true)
                 folderURLs[folder.id] = sub
@@ -660,8 +631,8 @@ final class VaultStore: ObservableObject {
             var usedNames: [UUID?: Set<String>] = [:]
             for doc in data.documents where doc.deletedAt == nil {
                 let dir = folderURLs[doc.folderID] ?? directory
-                let base = Self.sanitizedFilename(doc.title.isEmpty ? "Untitled" : doc.title)
-                let name = Self.uniqueName(base, used: &usedNames[doc.folderID, default: []])
+                let base = VaultNaming.sanitizedFilename(doc.title.isEmpty ? "Untitled" : doc.title)
+                let name = VaultNaming.uniqueName(base, used: &usedNames[doc.folderID, default: []])
                 let fileURL = dir.appendingPathComponent(name).appendingPathExtension("md")
                 try Data(doc.content.utf8).write(to: fileURL, options: [.atomic])
                 written += 1
@@ -689,7 +660,9 @@ final class VaultStore: ObservableObject {
               !env.salt.isEmpty, !env.ciphertext.isEmpty else {
             return "That file is not a valid Secrets Vault export."
         }
-        if phase == .unlocked { saveNow() }
+        if phase == .unlocked, !saveNow() {
+            return "Import cancelled: the current vault could not be saved first."
+        }
         rotateBackups(force: true)
         do {
             try raw.write(to: fileURL, options: [.atomic])
@@ -711,28 +684,5 @@ final class VaultStore: ObservableObject {
             phase = .locked
         }
         return nil
-    }
-
-    private static func sanitizedFilename(_ name: String) -> String {
-        var cleaned = name
-            .components(separatedBy: CharacterSet(charactersIn: "/:\\"))
-            .joined(separator: "-")
-            .trimmingCharacters(in: .whitespaces)
-        cleaned = String(cleaned.prefix(120))
-        while cleaned.hasPrefix(".") { cleaned.removeFirst() }
-        return cleaned.isEmpty ? "Untitled" : cleaned
-    }
-
-    /// Returns `base`, or "base 2", "base 3", … so names stay unique on a
-    /// case-insensitive file system; records the result in `used`.
-    private static func uniqueName(_ base: String, used: inout Set<String>) -> String {
-        var name = base
-        var n = 2
-        while used.contains(name.lowercased()) {
-            name = "\(base) \(n)"
-            n += 1
-        }
-        used.insert(name.lowercased())
-        return name
     }
 }

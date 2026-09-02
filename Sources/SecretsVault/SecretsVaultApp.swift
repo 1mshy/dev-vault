@@ -1,9 +1,9 @@
 import SwiftUI
 import AppKit
-import Combine
 
 @main
 struct SecretsVaultApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = VaultStore()
     @StateObject private var themes = ThemeManager()
 
@@ -20,9 +20,7 @@ struct SecretsVaultApp: App {
                 .environmentObject(themes)
                 .tint(themes.current.resolvedAccent)
                 .preferredColorScheme(themes.current.colorScheme)
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                    store.saveNow()
-                }
+                .onAppear { appDelegate.store = store }   // save-or-veto on quit
         }
         .defaultSize(width: 1000, height: 640)
         .commands {

@@ -28,8 +28,12 @@ echo "==> Release $TAG — building"
 APP_VERSION="$VERSION" ./build.sh
 
 ZIP="dist/SecretsVault-$VERSION.zip"
-rm -f "$ZIP"
+SUM="$ZIP.sha256"
+rm -f "$ZIP" "$SUM"
 ditto -c -k --keepParent "dist/Secrets Vault.app" "$ZIP"
+# Published next to the zip. The in-app updater refuses to install a download
+# that does not match it (see UpdateService / CodeSignature in the app).
+(cd dist && shasum -a 256 "$(basename "$ZIP")" > "$(basename "$SUM")")
 
 # Release notes: commit subjects since the previous release tag.
 PREV="$(git describe --tags --abbrev=0 "$SHA^" 2>/dev/null || true)"
@@ -52,7 +56,7 @@ echo "    log: $LOG"
     echo "release: publish manually with: scripts/release.sh $SHA"
     exit 1
   fi
-  gh release create "$TAG" "$ZIP" \
+  gh release create "$TAG" "$ZIP" "$SUM" \
     --target "$SHA" \
     --title "Secrets Vault $VERSION" \
     --notes "$NOTES"

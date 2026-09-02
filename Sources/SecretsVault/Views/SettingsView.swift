@@ -353,7 +353,7 @@ private struct UpdatesSettings: View {
                         }
                     }
                     if updater.canUpdate {
-                        Text("Downloads the update from GitHub, replaces the app in place and relaunches it. The vault saves and locks when the app quits.")
+                        Text("Downloads the update from GitHub, verifies it against the published checksum and this app's code signature, then replaces the app in place and relaunches it. Nothing is installed if verification fails. The vault saves and locks when the app quits.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {

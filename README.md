@@ -55,6 +55,14 @@ Touch ID key storage: the app first tries the **data-protection keychain** with 
 
 Verifies Argon2id determinism, AES-GCM round-trip, wrong-key rejection, and legacy-envelope decoding. Prints `SELFTEST OK` on success.
 
+### Unit tests
+
+```
+swift test
+```
+
+The UI-free parts of the app live in the `SecretsVaultCore` library target (`Sources/SecretsVaultCore`): crypto and the vault file format, the document model with its folder/delete/restore operations, the markdown block parser, and the version and file-naming helpers. `Tests/SecretsVaultCoreTests` covers them. The app target (`Sources/SecretsVault`) holds the SwiftUI views, `VaultStore`, Keychain/Touch ID, clipboard hygiene and the updater.
+
 ## Auto-update & releases
 
 **In-app updates** — Settings → Updates → *Check for Updates* asks GitHub for the
@@ -62,12 +70,22 @@ latest release of `1mshy/dev-vault`; one click then downloads it, swaps the app
 bundle in place and relaunches (the vault saves and locks on quit, as always).
 Updating requires running from a real `.app` bundle in a folder you can write to.
 
+**Nothing is installed until the download is verified.** The zip must match the
+`.sha256` published with the release, and the extracted bundle must have an
+intact code signature and the same bundle identifier as the running app. When
+the running app is signed with an Apple-issued certificate, the new bundle must
+also be signed by the same Team ID under the Apple anchor. An ad-hoc-signed
+build has no identity to pin to, so for it the published checksum is required
+rather than optional. The swap itself is two renames, so a failed copy never
+leaves you without an app, and if the vault cannot be saved on quit the update
+is cancelled and nothing is replaced.
+
 **Publishing runs locally** via a git hook — on every push to `main`:
 
 1. `scripts/git-hooks/pre-push` builds `dist/Secrets Vault.app` and zips it
    (a broken build aborts the push; bypass with `git push --no-verify`)
 2. once the pushed commit is visible on `origin/main`, a background job creates
-   the `v<version>` tag + GitHub release with the zip attached
+   the `v<version>` tag + GitHub release with the zip and its `.sha256` attached
    (log: `dist/release-v<version>.log`)
 
 Versions are `MAJOR.MINOR.PATCH`: `MAJOR.MINOR` comes from the `VERSION` file,

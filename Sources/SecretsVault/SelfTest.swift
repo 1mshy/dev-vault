@@ -1,4 +1,5 @@
 import Foundation
+import SecretsVaultCore
 
 /// Headless crypto sanity check, run with `SecretsVault --selftest`.
 /// Verifies Argon2id determinism, AES-GCM round-trip, wrong-key rejection,

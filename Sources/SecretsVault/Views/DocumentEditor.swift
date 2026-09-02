@@ -1,4 +1,5 @@
 import SwiftUI
+import SecretsVaultCore
 
 struct DocumentEditor: View {
     @EnvironmentObject var store: VaultStore

@@ -1,4 +1,5 @@
 import SwiftUI
+import SecretsVaultCore
 
 struct MainView: View {
     @EnvironmentObject var store: VaultStore
